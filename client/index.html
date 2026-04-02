@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSE Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #0f0f0f; color: #e0e0e0; padding: 24px; }
+    h1 { font-size: 16px; font-weight: 600; color: #7c3aed; margin-bottom: 16px; letter-spacing: 0.05em; }
+    .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+    input {
+      flex: 1; padding: 8px 12px; background: #1a1a1a; border: 1px solid #333;
+      border-radius: 6px; color: #e0e0e0; font-family: monospace; font-size: 13px;
+    }
+    button {
+      padding: 8px 16px; border-radius: 6px; border: none; font-family: monospace;
+      font-size: 13px; cursor: pointer; font-weight: 600;
+    }
+    #connectBtn { background: #7c3aed; color: #fff; }
+    #connectBtn:hover { background: #6d28d9; }
+    #connectBtn.connected { background: #dc2626; }
+    #connectBtn.connected:hover { background: #b91c1c; }
+    .status {
+      display: flex; align-items: center; gap: 6px; font-size: 12px;
+      margin-bottom: 12px; color: #888;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #333;
+      transition: background 0.2s;
+    }
+    .dot.connecting { background: #f59e0b; animation: pulse 1s infinite; }
+    .dot.connected { background: #10b981; }
+    .dot.error { background: #dc2626; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+    .stats {
+      display: flex; gap: 20px; margin-bottom: 12px; font-size: 12px; color: #666;
+    }
+    .stat span { color: #a78bfa; font-weight: 600; }
+    #log {
+      background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px;
+      padding: 12px; height: 480px; overflow-y: auto; display: flex;
+      flex-direction: column; gap: 4px;
+    }
+    .entry { display: flex; gap: 10px; font-size: 12px; line-height: 1.5; }
+    .entry .ts { color: #555; flex-shrink: 0; }
+    .entry .tag { padding: 1px 6px; border-radius: 3px; font-size: 11px; flex-shrink: 0; }
+    .tag-event { background: #1e1b4b; color: #a78bfa; }
+    .tag-info  { background: #1a2e1a; color: #6ee7b7; }
+    .tag-error { background: #2e1a1a; color: #fca5a5; }
+    .entry .body { color: #d1d5db; word-break: break-all; }
+    #log::-webkit-scrollbar { width: 4px; }
+    #log::-webkit-scrollbar-track { background: #1a1a1a; }
+    #log::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <h1>SSE TEST CLIENT</h1>
+
+  <div class="controls">
+    <input id="urlInput" value="http://localhost:9090/events" placeholder="SSE endpoint URL" />
+    <button id="connectBtn" onclick="toggle()">Connect</button>
+    <button onclick="clearLog()" style="background:#2a2a2a;color:#aaa;">Clear</button>
+  </div>
+
+  <div class="status">
+    <div class="dot" id="dot"></div>
+    <span id="statusText">Disconnected</span>
+  </div>
+
+  <div class="stats">
+    <div>Events received: <span id="countStat">0</span></div>
+    <div>Last event: <span id="lastStat">—</span></div>
+    <div>Reconnects: <span id="reconnectStat">0</span></div>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    var sseAbortController = null;
+    var eventCount = 0;
+    var reconnectCount = 0;
+    var isConnected = false;
+
+    function now() {
+      return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function addEntry(tag, tagClass, body) {
+      var log = document.getElementById("log");
+      var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+      var el = document.createElement("div");
+      el.className = "entry";
+      el.innerHTML =
+        '<span class="ts">' + now() + '</span>' +
+        '<span class="tag ' + tagClass + '">' + tag + '</span>' +
+        '<span class="body">' + body + '</span>';
+      log.appendChild(el);
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
+
+    function setStatus(state, text) {
+      var dot = document.getElementById("dot");
+      var btn = document.getElementById("connectBtn");
+      dot.className = "dot " + state;
+      document.getElementById("statusText").textContent = text;
+      if (state === "connected") {
+        btn.textContent = "Disconnect";
+        btn.className = "connected";
+      } else {
+        btn.textContent = "Connect";
+        btn.className = "";
+      }
+    }
+
+    function clearLog() {
+      document.getElementById("log").innerHTML = "";
+    }
+
+    function toggle() {
+      if (isConnected) {
+        disconnect();
+      } else {
+        connect();
+      }
+    }
+
+    function disconnect() {
+      if (sseAbortController) {
+        sseAbortController.abort();
+        sseAbortController = null;
+      }
+      isConnected = false;
+      setStatus("", "Disconnected");
+      addEntry("INFO", "tag-info", "Disconnected by user");
+    }
+
+    function connect() {
+      var url = document.getElementById("urlInput").value.trim();
+      if (!url) return;
+
+      isConnected = true;
+      sseAbortController = new AbortController();
+      var signal = sseAbortController.signal;
+
+      (async function connectLoop() {
+        setStatus("connecting", "Connecting...");
+        addEntry("INFO", "tag-info", "Connecting to " + url);
+
+        try {
+          var response = await fetch(url, { signal: signal });
+
+          if (!response.ok) {
+            throw new Error("HTTP " + response.status + " " + response.statusText);
+          }
+
+          setStatus("connected", "Connected");
+          addEntry("INFO", "tag-info", "Connection established");
+
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = "";
+
+          while (true) {
+            var result = await reader.read();
+            if (result.done) break;
+            buffer += decoder.decode(result.value, { stream: true });
+            var lines = buffer.split("\n");
+            buffer = lines.pop();
+            var eventData = null;
+            var eventId = null;
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+              if (line.startsWith("data:")) {
+                eventData = line.slice(5).trim();
+              } else if (line.startsWith("id:")) {
+                eventId = line.slice(3).trim();
+              } else if (line === "" && eventData !== null) {
+                eventCount++;
+                document.getElementById("countStat").textContent = eventCount;
+                document.getElementById("lastStat").textContent = now();
+                var label = eventId ? "#" + eventId : "EVENT";
+                addEntry(label, "tag-event", eventData);
+                eventData = null;
+                eventId = null;
+              }
+            }
+          }
+
+          if (isConnected) {
+            addEntry("INFO", "tag-info", "Stream ended, reconnecting in 2s...");
+            reconnectCount++;
+            document.getElementById("reconnectStat").textContent = reconnectCount;
+            setStatus("connecting", "Reconnecting...");
+            await sleep(2000);
+            if (isConnected) connectLoop();
+          }
+
+        } catch (e) {
+          if (e.name === "AbortError") return;
+          addEntry("ERROR", "tag-error", e.message);
+          if (isConnected) {
+            reconnectCount++;
+            document.getElementById("reconnectStat").textContent = reconnectCount;
+            setStatus("connecting", "Reconnecting in 3s...");
+            await sleep(3000);
+            if (isConnected) connectLoop();
+          }
+        }
+      })();
+    }
+
+    function sleep(ms) {
+      return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+  </script>
+</body>
+</html>

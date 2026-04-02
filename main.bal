@@ -1,0 +1,42 @@
+import ballerina/http;
+import ballerina/lang.runtime;
+import ballerina/time;
+
+listener http:Listener httpListener = new (9090);
+
+@http:ServiceConfig {
+    cors: {
+        allowOrigins: ["*"]
+    }
+}
+service / on httpListener {
+
+    resource function get events() returns http:Response {
+        http:Response response = new;
+        stream<http:SseEvent, error?> eventStream = new (new SseGenerator());
+        response.setSseEventStream(eventStream);
+        response.setHeader("X-Accel-Buffering", "no");
+        return response;
+    }
+}
+
+isolated class SseGenerator {
+    private int count = 0;
+
+    public isolated function next() returns record {|http:SseEvent value;|}|error? {
+        runtime:sleep(1);
+        int currentCount;
+        lock {
+            self.count += 1;
+            currentCount = self.count;
+        }
+        time:Utc now = time:utcNow();
+        string timestamp = time:utcToString(now);
+        return {
+            value: {
+                id: currentCount.toString(),
+                data: string `{"count":${currentCount},"time":"${timestamp}"}`
+            }
+        };
+    }
+}
