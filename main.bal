@@ -18,6 +18,8 @@ service / on httpListener {
         stream<http:SseEvent, error?> eventStream = new (new SseGenerator());
         response.setSseEventStream(eventStream);
         response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Access-Control-Allow-Origin", "*");
+        response.setHeader("Access-Control-Allow-Headers", "Test-Key, Content-Type");
         return response;
     }
 }
