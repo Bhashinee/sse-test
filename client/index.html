@@ -62,6 +62,9 @@
     <button id="connectBtn" onclick="toggle()">Connect</button>
     <button onclick="clearLog()" style="background:#2a2a2a;color:#aaa;">Clear</button>
   </div>
+  <div class="controls">
+    <input id="testKeyInput" placeholder="Test-Key token (optional)" />
+  </div>
 
   <div class="status">
     <div class="dot" id="dot"></div>
@@ -148,7 +151,10 @@
         addEntry("INFO", "tag-info", "Connecting to " + url);
 
         try {
-          var response = await fetch(url, { signal: signal });
+          var headers = {};
+          var testKey = document.getElementById("testKeyInput").value.trim();
+          if (testKey) headers["Test-Key"] = testKey;
+          var response = await fetch(url, { headers: headers, signal: signal });
 
           if (!response.ok) {
             throw new Error("HTTP " + response.status + " " + response.statusText);
