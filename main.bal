@@ -6,7 +6,9 @@ listener http:Listener httpListener = new (9090);
 
 @http:ServiceConfig {
     cors: {
-        allowOrigins: ["*"]
+        allowOrigins: ["*"],
+        allowHeaders: ["Test-Key", "Content-Type"],
+        allowMethods: ["GET", "OPTIONS"]
     }
 }
 service / on httpListener {
